@@ -1,607 +1,441 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  onSnapshot,
+  collection,
+  query,
+  where,
+  addDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
 
-// Global variables provided by the canvas environment
-const __app_id = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const __firebase_config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-const __initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+// IMPORTANT: These global variables are provided by the canvas environment.
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-let app, auth, db;
-try {
-    if (__firebase_config) {
-        app = initializeApp(__firebase_config);
-        auth = getAuth(app);
-        db = getFirestore(app);
-        
-    } else {
-        throw new Error("Firebase configuration is not available.");
-    }
-} catch (e) {
-    console.error("Firebase Initialization Error:", e);
-}
-
+// The main App component
 const App = () => {
-    const [page, setPage] = useState('invitor');
-    const [invitationData, setInvitationData] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [userId, setUserId] = useState(null);
-    const [error, setError] = useState(null);
+  const [page, setPage] = useState('invitor');
+  const [invitationData, setInvitationData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [invitorData, setInvitorData] = useState(null);
+  const [guests, setGuests] = useState([]);
+  const [error, setError] = useState('');
 
-    useEffect(() => {
-        if (!auth || !db) {
-            setError("App failed to start. Firebase may not be configured.");
-            setLoading(false);
-            return;
-        }
+  // Firebase initialization and authentication
+  useEffect(() => {
+    try {
+      if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+        setError("Firebase Initialization Error: Firebase configuration is missing.");
+        setLoading(false);
+        return;
+      }
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const invitationId = urlParams.get('invitationId');
+      const app = initializeApp(firebaseConfig);
+      const firestore = getFirestore(app);
+      const firebaseAuth = getAuth(app);
+      setDb(firestore);
+      setAuth(firebaseAuth);
 
-        onAuthStateChanged(auth, async (user) => {
-            if (!user) {
-                try {
-                    if (__initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } catch (e) {
-                    console.error("Auth failed:", e);
-                    setError("Failed to start the app. Please try again.");
-                    setLoading(false);
-                    return;
-                }
-            }
-            const currentUserId = auth.currentUser?.uid || crypto.randomUUID();
-            setUserId(currentUserId);
-
-            if (invitationId) {
-                setPage('invitee');
-                const invitationRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'invitations', invitationId);
-                const unsubscribe = onSnapshot(invitationRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        setInvitationData(docSnap.data());
-                    } else {
-                        setError("Invitation not found. It may have been deleted.");
-                    }
-                    setLoading(false);
-                }, (err) => {
-                    console.error("Error fetching invitation:", err);
-                    setError("Failed to load invitation. Please check your link.");
-                    setLoading(false);
-                });
-                return () => unsubscribe();
-            } else {
-                setPage('invitor');
-                const invitorRef = doc(db, 'artifacts', __app_id, 'users', currentUserId, 'invitorData', 'main');
-                const unsubscribe = onSnapshot(invitorRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        setInvitationData(docSnap.data());
-                    } else {
-                        setInvitationData(null);
-                    }
-                    setLoading(false);
-                }, (err) => {
-                    console.error("Error fetching invitor data:", err);
-                    setError("Failed to load your data. Please refresh.");
-                    setLoading(false);
-                });
-                return () => unsubscribe();
-            }
-        });
-    }, []);
-
-    const handleCreateInvitation = async (event) => {
-        event.preventDefault();
-        setLoading(true);
-        const invitorName = event.target.invitorName.value;
-        const partnerName = event.target.partnerName.value;
-        const date = event.target.date.value;
-        const time = event.target.time.value;
-        const location = event.target.location.value;
-        
-        const invitorRef = doc(db, 'artifacts', __app_id, 'users', userId, 'invitorData', 'main');
-        const invitationRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'invitations', userId);
-
-        const newInvitationData = {
-            invitorName,
-            partnerName,
-            date,
-            time,
-            location,
-            invitationId: userId,
-            invitees: [],
-        };
-
-        try {
-            await setDoc(invitorRef, newInvitationData);
-            await setDoc(invitationRef, newInvitationData);
-            setLoading(false);
-        } catch (e) {
-            console.error("Error writing document: ", e);
-            setError("Failed to save invitation. Please check your network.");
-            setLoading(false);
-        }
-    };
-
-    const handleRsvp = async (e) => {
-        e.preventDefault();
-        const inviteeName = e.target.inviteeName.value;
-        const rsvpStatus = e.target.rsvpStatus.value;
-        const invitationId = new URLSearchParams(window.location.search).get('invitationId');
-        
-        const invitationRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'invitations', invitationId);
-        const docSnap = await getDoc(invitationRef);
-        const currentInvitees = docSnap.data().invitees || [];
-        
-        if (!currentInvitees.some(guest => guest.name === inviteeName)) {
-            const updatedInvitees = [...currentInvitees, { name: inviteeName, status: rsvpStatus }];
-            await setDoc(invitationRef, { invitees: updatedInvitees }, { merge: true });
+      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+        if (user) {
+          setUserId(user.uid);
+          setLoading(false);
         } else {
-            const updatedInvitees = currentInvitees.map(guest => 
-                guest.name === inviteeName ? { ...guest, status: rsvpStatus } : guest
-            );
-            await setDoc(invitationRef, { invitees: updatedInvitees }, { merge: true });
+          try {
+            if (initialAuthToken) {
+              await signInWithCustomToken(firebaseAuth, initialAuthToken);
+            } else {
+              await signInAnonymously(firebaseAuth);
+            }
+          } catch (error) {
+            console.error("Firebase Auth Error:", error);
+            setError("Authentication failed. Please try again.");
+            setLoading(false);
+          }
         }
-        
-        const rsvpModal = document.getElementById('rsvp-success-modal');
-        if (rsvpModal) rsvpModal.classList.remove('hidden');
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.error("Firebase Initialization Error:", e);
+      setError("Firebase Initialization Error: Check your API key or configuration.");
+      setLoading(false);
+    }
+  }, []);
+
+  // Set up real-time listener for invitor data
+  useEffect(() => {
+    if (db && userId) {
+      const invitorDocRef = doc(db, `/artifacts/${appId}/users/${userId}/invitations/${userId}`);
+      const unsubscribe = onSnapshot(invitorDocRef, (doc) => {
+        if (doc.exists()) {
+          setInvitorData(doc.data());
+        } else {
+          setInvitorData(null);
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [db, userId]);
+
+  // Set up real-time listener for guests list
+  useEffect(() => {
+    if (db && invitorData) {
+      const guestsCollectionRef = collection(db, `/artifacts/${appId}/users/${userId}/guests`);
+      const q = query(guestsCollectionRef);
+      const unsubscribe = onSnapshot(q, (querySnapshot) => {
+        const guestsList = [];
+        querySnapshot.forEach((doc) => {
+          guestsList.push({ id: doc.id, ...doc.data() });
+        });
+        setGuests(guestsList);
+      });
+      return () => unsubscribe();
+    }
+  }, [db, invitorData]);
+
+  // Handle invitation link logic
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const invitorId = params.get('invitorId');
+    if (invitorId) {
+      setPage('invitee');
+      setLoading(true);
+
+      const invitorDocRef = doc(db, `/artifacts/${appId}/users/${invitorId}/invitations/${invitorId}`);
+      getDoc(invitorDocRef).then((doc) => {
+        if (doc.exists()) {
+          setInvitationData(doc.data());
+        } else {
+          setInvitationData(null);
+        }
+        setLoading(false);
+      }).catch((e) => {
+        console.error("Error fetching invitation:", e);
+        setInvitationData(null);
+        setLoading(false);
+      });
+    }
+  }, [db]);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-gray-100">
+        <div className="text-xl font-medium text-gray-700">Loading...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex justify-center items-center min-h-screen bg-red-100 text-red-800 p-4 rounded-lg shadow">
+        <div className="text-lg text-center">{error}</div>
+      </div>
+    );
+  }
+
+  const PageContent = () => {
+    if (page === 'invitor') {
+      return <InvitorPage />;
+    } else {
+      return <InvitationPage />;
+    }
+  };
+
+  const InvitorPage = () => {
+    const [coupleName1, setCoupleName1] = useState(invitorData?.coupleName1 || '');
+    const [coupleName2, setCoupleName2] = useState(invitorData?.coupleName2 || '');
+    const [date, setDate] = useState(invitorData?.date || '');
+    const [location, setLocation] = useState(invitorData?.location || '');
+    const [guestName, setGuestName] = useState('');
+    const [shareUrl, setShareUrl] = useState('');
+    const [showInvitation, setShowInvitation] = useState(true);
+
+    const handleSaveInvitation = async () => {
+      if (!coupleName1 || !coupleName2 || !date || !location) {
+        alert('Please fill in all fields.');
+        return;
+      }
+      try {
+        const invitorDocRef = doc(db, `/artifacts/${appId}/users/${userId}/invitations/${userId}`);
+        await setDoc(invitorDocRef, {
+          coupleName1,
+          coupleName2,
+          date,
+          location,
+          createdAt: serverTimestamp(),
+        });
+
+        const appUrl = window.location.href.split('?')[0];
+        setShareUrl(`${appUrl}?invitorId=${userId}`);
+
+      } catch (e) {
+        console.error("Error adding document: ", e);
+      }
     };
 
-    const InvitationPage = () => {
-        if (loading) return (
-            <div className="flex justify-center items-center h-screen bg-gray-100">
-                <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto mb-4"></div>
-                    <p className="text-gray-600">Loading Invitation...</p>
-                </div>
-            </div>
-        );
-        if (error) return (
-            <div className="flex justify-center items-center h-screen bg-gray-100">
-                <p className="text-red-500 text-center">{error}</p>
-            </div>
-        );
-        if (!invitationData) return null;
-
-        return (
-            <div className="flex flex-col items-center p-6 min-h-screen">
-                <div className="w-full max-w-lg bg-white rounded-xl shadow-lg p-6 my-auto text-center">
-                    <h1 className="text-4xl font-extrabold text-indigo-600 mb-2">You're Invited!</h1>
-                    <p className="text-lg text-gray-700 mb-6">Join us as we celebrate our love.</p>
-                    <div className="space-y-4">
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-xl font-semibold text-gray-800">{invitationData.invitorName} & {invitationData.partnerName}</p>
-                            <p className="text-gray-500 text-sm">{invitationData.date} at {invitationData.time}</p>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-lg font-semibold text-gray-800">{invitationData.location}</p>
-                        </div>
-                    </div>
-                    
-                    <form onSubmit={handleRsvp} className="mt-8 space-y-4">
-                        <input type="text" name="inviteeName" required placeholder="Your Full Name" className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
-                        <div className="flex flex-col space-y-2 text-left">
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="coming" name="rsvpStatus" value="Coming" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="coming" className="text-gray-700">Coming</label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="not-coming" name="rsvpStatus" value="Can't Make It" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="not-coming" className="text-gray-700">Sorry, can't make it</label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="try" name="rsvpStatus" value="Will Try" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="try" className="text-gray-700">I will try</label>
-                            </div>
-                        </div>
-                        <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300 transform hover:scale-105">Submit RSVP</button>
-                    </form>
-                    
-                    <a href="/" className="block mt-6 text-indigo-500 hover:underline">Create your own invitation!</a>
-                </div>
-                
-                <div id="rsvp-success-modal" className="modal hidden">
-                    <div className="modal-content">
-                        <h3 className="text-xl font-bold mb-4 text-green-600">Thank you for your response!</h3>
-                        <button onClick={() => document.getElementById('rsvp-success-modal').classList.add('hidden')} className="mt-6 bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300">Close</button>
-                    </div>
-                </div>
-            </div>
-        );
+    const handleAddGuest = async () => {
+      if (!guestName) return;
+      try {
+        const guestsCollectionRef = collection(db, `/artifacts/${appId}/users/${userId}/guests`);
+        await addDoc(guestsCollectionRef, {
+          name: guestName,
+          status: "pending",
+          createdAt: serverTimestamp(),
+        });
+        setGuestName('');
+      } catch (e) {
+        console.error("Error adding guest:", e);
+      }
     };
 
-    const InvitorPage = () => {
-        const shareUrl = `${window.location.origin}${window.location.pathname}?invitationId=${userId}`;
-        
-        const handleShare = (platform) => {
-            const message = encodeURIComponent(`You're invited to our wedding! RSVP here: ${shareUrl}`);
-            if (platform === 'whatsapp') {
-                window.open(`https://wa.me/?text=${message}`, '_blank');
-            } else if (platform === 'email') {
-                window.open(`mailto:?subject=You're Invited&body=${message}`, '_blank');
-            }
-        };
-
-        const rsvpCounts = {
-            'Coming': invitationData?.invitees?.filter(i => i.status === 'Coming').length || 0,
-            'Can\'t Make It': invitationData?.invitees?.filter(i => i.status === 'Can\'t Make It').length || 0,
-            'Will Try': invitationData?.invitees?.filter(i => i.status === 'Will Try').length || 0,
-            'Total Guests': invitationData?.invitees?.length || 0
-        };
-
-        return (
-            <div className="flex flex-col items-center p-6 min-h-screen">
-                <div className="w-full max-w-lg bg-white rounded-xl shadow-lg p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h1 className="text-2xl font-bold text-gray-800">Your Dashboard</h1>
-                        <span className="text-sm text-gray-400">ID: {userId}</span>
-                    </div>
-
-                    {invitationData ? (
-                        <div>
-                            <div className="bg-gray-100 p-4 rounded-lg">
-                                <h2 className="text-xl font-semibold mb-2">Invitation Details</h2>
-                                <p><strong>Couple:</strong> {invitationData.invitorName} & {invitationData.partnerName}</p>
-                                <p><strong>Date:</strong> {invitationData.date}</p>
-                                <p><strong>Time:</strong> {invitationData.time}</p>
-                                <p><strong>Location:</strong> {invitationData.location}</p>
-                            </div>
-
-                            <div className="mt-6 text-center">
-                                <h2 className="text-xl font-semibold mb-2">Share Your Invitation</h2>
-                                <p className="text-sm text-gray-500 mb-4">Your guests can use this link to RSVP.</p>
-                                <div className="flex justify-center space-x-2">
-                                    <button onClick={() => navigator.clipboard.writeText(shareUrl).then(() => {
-                                        const shareBtn = document.getElementById('copy-btn');
-                                        shareBtn.textContent = 'Copied!';
-                                        setTimeout(() => shareBtn.textContent = 'Copy Link', 2000);
-                                    })} id="copy-btn" className="bg-gray-200 text-gray-800 font-bold py-3 px-6 rounded-full hover:bg-gray-300 transition duration-300">Copy Link</button>
-                                    <button onClick={() => handleShare('whatsapp')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-full hover:bg-green-600 transition duration-300">WhatsApp</button>
-                                    <button onClick={() => handleShare('email')} className="bg-blue-500 text-white font-bold py-3 px-6 rounded-full hover:bg-blue-600 transition duration-300">Email</button>
-                                </div>
-                            </div>
-                            
-                            <div className="mt-8">
-                                <h2 className="text-xl font-semibold mb-2">RSVP Tracker</h2>
-                                <div className="grid grid-cols-2 gap-4 text-center">
-                                    <div className="bg-green-100 text-green-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Coming']}</div>
-                                        <div className="text-xs">Coming</div>
-                                    </div>
-                                    <div className="bg-red-100 text-red-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Can\'t Make It']}</div>
-                                        <div className="text-xs">Can't Make It</div>
-                                    </div>
-                                    <div className="bg-yellow-100 text-yellow-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Will Try']}</div>
-                                        <div className="text-xs">I Will Try</div>
-                                    </div>
-                                    <div className="bg-gray-100 text-gray-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Total Guests']}</div>
-                                        <div className="text-xs">Total Guests</div>
-                                    </div>
-                                </div>
-                                
-                                <h3 className="text-lg font-semibold mt-6 mb-2">Guest List</h3>
-                                <ul className="space-y-2">
-                                    {invitationData.invitees.length > 0 ? (
-                                        invitationData.invitees.map((invitee, index) => (
-                                            <li key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg shadow-sm">
-                                                <span>{invitee.name}</span>
-                                                <span className={`text-sm font-semibold py-1 px-3 rounded-full ${
-                                                    invitee.status === 'Coming' ? 'bg-green-200 text-green-700' :
-                                                    invitee.status === 'Can\'t Make It' ? 'bg-red-200 text-red-700' :
-                                                    'bg-yellow-200 text-yellow-700'
-                                                }`}>
-                                                    {invitee.status}
-                                                </span>
-                                            </li>
-                                        ))
-                                    ) : (
-                                        <li className="text-center text-gray-500 py-4">No responses yet.</li>
-                                    )}
-                                </ul>
-                            </div>
-                        </div>
-                    ) : (
-                        <form onSubmit={handleCreateInvitation} className="space-y-4">
-                            <h2 className="text-xl font-semibold text-center text-gray-800">Create Your Invitation</h2>
-                            <input type="text" name="invitorName" required placeholder="Your Name" className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="text" name="partnerName" required placeholder="Partner's Name" className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="date" name="date" required className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="time" name="time" required className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="text" name="location" required placeholder="Location" className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300">Create</button>
-                        </form>
-                    )}
-                </div>
-            </div>
-        );
+    const handleShare = (guestId) => {
+      const appUrl = window.location.href.split('?')[0];
+      const link = `${appUrl}?invitorId=${userId}&guestId=${guestId}`;
+      const message = `You're invited! Please click the link to RSVP: ${link}`;
+      const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+      window.open(whatsappUrl, '_blank');
     };
 
-    const InvitationPage = () => {
-        const handleRsvp = async (e) => {
-            e.preventDefault();
-            const inviteeName = e.target.inviteeName.value;
-            const rsvpStatus = e.target.rsvpStatus.value;
-            const invitationId = new URLSearchParams(window.location.search).get('invitationId');
-            
-            const invitationRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'invitations', invitationId);
-            const docSnap = await getDoc(invitationRef);
-            const currentInvitees = docSnap.data().invitees || [];
-            
-            if (!currentInvitees.some(guest => guest.name === inviteeName)) {
-                const updatedInvitees = [...currentInvitees, { name: inviteeName, status: rsvpStatus }];
-                await setDoc(invitationRef, { invitees: updatedInvitees }, { merge: true });
-            } else {
-                const updatedInvitees = currentInvitees.map(guest => 
-                    guest.name === inviteeName ? { ...guest, status: rsvpStatus } : guest
-                );
-                await setDoc(invitationRef, { invitees: updatedInvitees }, { merge: true });
-            }
-            
-            const rsvpModal = document.getElementById('rsvp-success-modal');
-            if (rsvpModal) rsvpModal.classList.remove('hidden');
-        };
-
-        const rsvpModalHtml = `
-            <div id="rsvp-success-modal" className="modal hidden">
-                <div className="modal-content">
-                    <h3 className="text-xl font-bold mb-4 text-green-600">Thank you for your response!</h3>
-                    <a href="/" className="block mt-4 text-indigo-500 hover:underline">Create your own invitation!</a>
-                </div>
-            </div>
-        `;
-
-        return (
-            <div className="flex flex-col items-center p-6 min-h-screen">
-                <div className="w-full max-w-lg bg-white rounded-xl shadow-lg p-6 my-auto text-center">
-                    <h1 className="text-4xl font-extrabold text-indigo-600 mb-2">You're Invited!</h1>
-                    <p className="text-lg text-gray-700 mb-6">Join us as we celebrate our love.</p>
-                    <div className="space-y-4">
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-xl font-semibold text-gray-800">{invitationData.invitorName} & {invitationData.partnerName}</p>
-                            <p className="text-gray-500 text-sm">{invitationData.date} at {invitationData.time}</p>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-lg font-semibold text-gray-800">{invitationData.location}</p>
-                        </div>
-                    </div>
-                    
-                    <form onSubmit={handleRsvp} className="mt-8 space-y-4">
-                        <input type="text" name="inviteeName" required placeholder="Your Full Name" className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
-                        <div className="flex flex-col space-y-2 text-left">
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="coming" name="rsvpStatus" value="Coming" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="coming" className="text-gray-700">Coming</label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="not-coming" name="rsvpStatus" value="Can't Make It" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="not-coming" className="text-gray-700">Sorry, can't make it</label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="try" name="rsvpStatus" value="Will Try" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="try" className="text-gray-700">I will try</label>
-                            </div>
-                        </div>
-                        <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300 transform hover:scale-105">Submit RSVP</button>
-                    </form>
-                    
-                    <a href="/" className="block mt-6 text-indigo-500 hover:underline">Create your own invitation!</a>
-                </div>
-                
-                <div id="rsvp-success-modal" className="modal hidden">
-                    <div className="modal-content">
-                        <h3 className="text-xl font-bold mb-4 text-green-600">Thank you for your response!</h3>
-                        <button onClick={() => document.getElementById('rsvp-success-modal').classList.add('hidden')} className="mt-6 bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300">Close</button>
-                    </div>
-                </div>
-            </div>
-        );
+    const getStatusCounts = () => {
+      const counts = {
+        coming: 0,
+        declined: 0,
+        pending: 0,
+      };
+      guests.forEach(guest => {
+        if (counts[guest.status]) {
+          counts[guest.status]++;
+        } else {
+          counts[guest.status] = 1;
+        }
+      });
+      return counts;
     };
 
-    const InvitorPage = () => {
-        const shareUrl = `${window.location.origin}${window.location.pathname}?invitationId=${userId}`;
-        
-        const handleShare = (platform) => {
-            const message = encodeURIComponent(`You're invited to our wedding! RSVP here: ${shareUrl}`);
-            if (platform === 'whatsapp') {
-                window.open(`https://wa.me/?text=${message}`, '_blank');
-            } else if (platform === 'email') {
-                window.open(`mailto:?subject=You're Invited&body=${message}`, '_blank');
-            }
-        };
-
-        const rsvpCounts = {
-            'Coming': invitationData?.invitees?.filter(i => i.status === 'Coming').length || 0,
-            'Can\'t Make It': invitationData?.invitees?.filter(i => i.status === 'Can\'t Make It').length || 0,
-            'Will Try': invitationData?.invitees?.filter(i => i.status === 'Will Try').length || 0,
-            'Total Guests': invitationData?.invitees?.length || 0
-        };
-
-        return (
-            <div className="flex flex-col items-center p-6 min-h-screen">
-                <div className="w-full max-w-lg bg-white rounded-xl shadow-lg p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h1 className="text-2xl font-bold text-gray-800">Your Dashboard</h1>
-                        <span className="text-sm text-gray-400">ID: {userId}</span>
-                    </div>
-
-                    {invitationData ? (
-                        <div>
-                            <div className="bg-gray-100 p-4 rounded-lg">
-                                <h2 className="text-xl font-semibold mb-2">Invitation Details</h2>
-                                <p><strong>Couple:</strong> {invitationData.invitorName} & {invitationData.partnerName}</p>
-                                <p><strong>Date:</strong> {invitationData.date}</p>
-                                <p><strong>Time:</strong> {invitationData.time}</p>
-                                <p><strong>Location:</strong> {invitationData.location}</p>
-                            </div>
-
-                            <div className="mt-6 text-center">
-                                <h2 className="text-xl font-semibold mb-2">Share Your Invitation</h2>
-                                <p className="text-sm text-gray-500 mb-4">Your guests can use this link to RSVP.</p>
-                                <div className="flex justify-center space-x-2">
-                                    <button onClick={() => navigator.clipboard.writeText(shareUrl).then(() => {
-                                        const shareBtn = document.getElementById('copy-btn');
-                                        shareBtn.textContent = 'Copied!';
-                                        setTimeout(() => shareBtn.textContent = 'Copy Link', 2000);
-                                    })} id="copy-btn" className="bg-gray-200 text-gray-800 font-bold py-3 px-6 rounded-full hover:bg-gray-300 transition duration-300">Copy Link</button>
-                                    <button onClick={() => handleShare('whatsapp')} className="bg-green-500 text-white font-bold py-3 px-6 rounded-full hover:bg-green-600 transition duration-300">WhatsApp</button>
-                                    <button onClick={() => handleShare('email')} className="bg-blue-500 text-white font-bold py-3 px-6 rounded-full hover:bg-blue-600 transition duration-300">Email</button>
-                                </div>
-                            </div>
-                            
-                            <div className="mt-8">
-                                <h2 className="text-xl font-semibold mb-2">RSVP Tracker</h2>
-                                <div className="grid grid-cols-2 gap-4 text-center">
-                                    <div className="bg-green-100 text-green-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Coming']}</div>
-                                        <div className="text-xs">Coming</div>
-                                    </div>
-                                    <div className="bg-red-100 text-red-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Can\'t Make It']}</div>
-                                        <div className="text-xs">Can't Make It</div>
-                                    </div>
-                                    <div className="bg-yellow-100 text-yellow-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Will Try']}</div>
-                                        <div className="text-xs">I Will Try</div>
-                                    </div>
-                                    <div className="bg-gray-100 text-gray-700 p-4 rounded-lg font-bold">
-                                        <div className="text-2xl">{rsvpCounts['Total Guests']}</div>
-                                        <div className="text-xs">Total Guests</div>
-                                    </div>
-                                </div>
-                                
-                                <h3 className="text-lg font-semibold mt-6 mb-2">Guest List</h3>
-                                <ul className="space-y-2">
-                                    {invitationData.invitees.length > 0 ? (
-                                        invitationData.invitees.map((invitee, index) => (
-                                            <li key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg shadow-sm">
-                                                <span>{invitee.name}</span>
-                                                <span className={`text-sm font-semibold py-1 px-3 rounded-full ${
-                                                    invitee.status === 'Coming' ? 'bg-green-200 text-green-700' :
-                                                    invitee.status === 'Can\'t Make It' ? 'bg-red-200 text-red-700' :
-                                                    'bg-yellow-200 text-yellow-700'
-                                                }`}>
-                                                    {invitee.status}
-                                                </span>
-                                            </li>
-                                        ))
-                                    ) : (
-                                        <li className="text-center text-gray-500 py-4">No responses yet.</li>
-                                    )}
-                                </ul>
-                            </div>
-                        </div>
-                    ) : (
-                        <form onSubmit={handleCreateInvitation} className="space-y-4">
-                            <h2 className="text-xl font-semibold text-center text-gray-800">Create Your Invitation</h2>
-                            <input type="text" name="invitorName" required placeholder="Your Name" className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="text" name="partnerName" required placeholder="Partner's Name" className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="date" name="date" required className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="time" name="time" required className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <input type="text" name="location" required placeholder="Location" className="w-full p-3 border border-gray-300 rounded-lg"/>
-                            <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300">Create</button>
-                        </form>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    const InvitationPage = () => {
-        const handleRsvp = async (e) => {
-            e.preventDefault();
-            const inviteeName = e.target.inviteeName.value;
-            const rsvpStatus = e.target.rsvpStatus.value;
-            const invitationId = new URLSearchParams(window.location.search).get('invitationId');
-            
-            const invitationRef = doc(db, 'artifacts', __app_id, 'public', 'data', 'invitations', invitationId);
-            const docSnap = await getDoc(invitationRef);
-            const currentInvitees = docSnap.data().invitees || [];
-            
-            if (!currentInvitees.some(guest => guest.name === inviteeName)) {
-                const updatedInvitees = [...currentInvitees, { name: inviteeName, status: rsvpStatus }];
-                await setDoc(invitationRef, { invitees: updatedInvitees }, { merge: true });
-            } else {
-                const updatedInvitees = currentInvitees.map(guest => 
-                    guest.name === inviteeName ? { ...guest, status: rsvpStatus } : guest
-                );
-                await setDoc(invitationRef, { invitees: updatedInvitees }, { merge: true });
-            }
-            
-            const rsvpModal = document.getElementById('rsvp-success-modal');
-            if (rsvpModal) rsvpModal.classList.remove('hidden');
-        };
-
-        const rsvpModalHtml = `
-            <div id="rsvp-success-modal" className="modal hidden">
-                <div className="modal-content">
-                    <h3 className="text-xl font-bold mb-4 text-green-600">Thank you for your response!</h3>
-                    <a href="/" className="block mt-4 text-indigo-500 hover:underline">Create your own invitation!</a>
-                </div>
-            </div>
-        `;
-
-        return (
-            <div className="flex flex-col items-center p-6 min-h-screen">
-                <div className="w-full max-w-lg bg-white rounded-xl shadow-lg p-6 my-auto text-center">
-                    <h1 className="text-4xl font-extrabold text-indigo-600 mb-2">You're Invited!</h1>
-                    <p className="text-lg text-gray-700 mb-6">Join us as we celebrate our love.</p>
-                    <div className="space-y-4">
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-xl font-semibold text-gray-800">{invitationData.invitorName} & {invitationData.partnerName}</p>
-                            <p className="text-gray-500 text-sm">{invitationData.date} at {invitationData.time}</p>
-                        </div>
-                        <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-lg font-semibold text-gray-800">{invitationData.location}</p>
-                        </div>
-                    </div>
-                    
-                    <form onSubmit={handleRsvp} className="mt-8 space-y-4">
-                        <input type="text" name="inviteeName" required placeholder="Your Full Name" className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
-                        <div className="flex flex-col space-y-2 text-left">
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="coming" name="rsvpStatus" value="Coming" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="coming" className="text-gray-700">Coming</label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="not-coming" name="rsvpStatus" value="Can't Make It" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="not-coming" className="text-gray-700">Sorry, can't make it</label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <input type="radio" id="try" name="rsvpStatus" value="Will Try" required className="form-radio text-indigo-600 focus:ring-indigo-500"/>
-                                <label htmlFor="try" className="text-gray-700">I will try</label>
-                            </div>
-                        </div>
-                        <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300 transform hover:scale-105">Submit RSVP</button>
-                    </form>
-                    
-                    <a href="/" className="block mt-6 text-indigo-500 hover:underline">Create your own invitation!</a>
-                </div>
-                
-                <div id="rsvp-success-modal" className="modal hidden">
-                    <div className="modal-content">
-                        <h3 className="text-xl font-bold mb-4 text-green-600">Thank you for your response!</h3>
-                        <button onClick={() => document.getElementById('rsvp-success-modal').classList.add('hidden')} className="mt-6 bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300">Close</button>
-                    </div>
-                </div>
-            </div>
-        );
-    };
+    const statusCounts = getStatusCounts();
 
     return (
-        <div className="App">
-            {page === 'invitor' ? (
-                <InvitorPage />
-            ) : (
-                <InvitationPage />
-            )}
+      <div className="min-h-screen bg-gradient-to-r from-purple-500 to-indigo-600 flex flex-col items-center p-4 text-white">
+        <div className="w-full max-w-xl text-center mb-8">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-2">Invitor Dashboard</h1>
+          <p className="text-lg md:text-xl font-light opacity-80">Manage your guest list and send invitations.</p>
         </div>
+
+        <div className="w-full max-w-xl bg-white bg-opacity-10 backdrop-blur-md rounded-xl shadow-2xl p-6 md:p-8 space-y-6">
+
+          {/* Invitation Details Section */}
+          <div className="bg-white bg-opacity-5 rounded-xl p-4 md:p-6 shadow-lg space-y-4">
+            <h2 className="text-2xl font-bold mb-2">Create Your Invitation</h2>
+            <input
+              type="text"
+              className="w-full p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
+              placeholder="Your Name"
+              value={coupleName1}
+              onChange={(e) => setCoupleName1(e.target.value)}
+            />
+            <input
+              type="text"
+              className="w-full p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
+              placeholder="Partner's Name"
+              value={coupleName2}
+              onChange={(e) => setCoupleName2(e.target.value)}
+            />
+            <input
+              type="text"
+              className="w-full p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
+              placeholder="Date (e.g., May 20, 2026)"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+            <input
+              type="text"
+              className="w-full p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
+              placeholder="Location (e.g., The Grand Ballroom)"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+            />
+            <button
+              onClick={handleSaveInvitation}
+              className="w-full p-3 rounded-lg font-bold text-white bg-indigo-500 hover:bg-indigo-700 transition transform hover:scale-105"
+            >
+              Save Invitation
+            </button>
+          </div>
+
+          {/* Guest List Management */}
+          <div className="bg-white bg-opacity-5 rounded-xl p-4 md:p-6 shadow-lg space-y-4">
+            <h2 className="text-2xl font-bold mb-2">Guest List</h2>
+            <div className="flex space-x-2 mb-4 text-sm">
+              <span className="p-2 rounded-lg bg-green-500 font-semibold">Coming: {statusCounts.coming}</span>
+              <span className="p-2 rounded-lg bg-red-500 font-semibold">Can't Come: {statusCounts.declined}</span>
+              <span className="p-2 rounded-lg bg-gray-500 font-semibold">Pending: {statusCounts.pending}</span>
+            </div>
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                className="flex-grow p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition"
+                placeholder="Enter guest name"
+                value={guestName}
+                onChange={(e) => setGuestName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddGuest()}
+              />
+              <button
+                onClick={handleAddGuest}
+                className="p-3 rounded-lg font-bold text-white bg-indigo-500 hover:bg-indigo-700 transition transform hover:scale-105"
+              >
+                Add
+              </button>
+            </div>
+            <ul className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+              {guests.map((guest) => (
+                <li key={guest.id} className="flex items-center justify-between p-3 bg-white bg-opacity-5 rounded-lg shadow-inner">
+                  <div className="flex-grow">
+                    <span className="font-semibold">{guest.name}</span>
+                    <span className={`ml-2 text-sm font-medium ${guest.status === 'coming' ? 'text-green-300' : guest.status === 'declined' ? 'text-red-300' : 'text-gray-300'}`}>
+                      - {guest.status}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleShare(guest.id)}
+                    className="ml-4 p-2 rounded-lg text-xs font-semibold text-white bg-indigo-500 hover:bg-indigo-700 transition transform hover:scale-105"
+                  >
+                    Share
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Invitation Link Section */}
+          {shareUrl && (
+            <div className="bg-white bg-opacity-5 rounded-xl p-4 md:p-6 shadow-lg space-y-4 text-center">
+              <h2 className="text-2xl font-bold mb-2">Share Your Invitation Link</h2>
+              <div className="p-3 rounded-lg bg-gray-900 bg-opacity-30 break-all text-sm">
+                {shareUrl}
+              </div>
+              <button
+                onClick={() => navigator.clipboard.writeText(shareUrl)}
+                className="w-full p-3 rounded-lg font-bold text-white bg-green-500 hover:bg-green-700 transition transform hover:scale-105"
+              >
+                Copy Link
+              </button>
+            </div>
+          )}
+
+        </div>
+      </div>
     );
+  };
+
+  const InvitationPage = () => {
+    const [guestName, setGuestName] = useState('');
+    const [status, setStatus] = useState('');
+    const [isSubmitted, setIsSubmitted] = useState(false);
+
+    const handleRsvp = async (newStatus) => {
+      const params = new URLSearchParams(window.location.search);
+      const invitorId = params.get('invitorId');
+      const guestId = params.get('guestId');
+
+      if (!guestId || !invitorId) {
+        alert("This invitation link is invalid.");
+        return;
+      }
+
+      if (!guestName) {
+        alert("Please enter your name.");
+        return;
+      }
+
+      try {
+        const guestDocRef = doc(db, `/artifacts/${appId}/users/${invitorId}/guests/${guestId}`);
+        await setDoc(guestDocRef, { name: guestName, status: newStatus }, { merge: true });
+        setStatus(newStatus);
+        setIsSubmitted(true);
+      } catch (e) {
+        console.error("Error updating RSVP:", e);
+      }
+    };
+
+    if (!invitationData) {
+      return (
+        <div className="min-h-screen flex justify-center items-center bg-gray-100 text-red-600">
+          Invitation not found.
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-gradient-to-r from-purple-500 to-indigo-600 flex items-center justify-center p-4 text-white">
+        <div className="w-full max-w-2xl bg-white bg-opacity-10 backdrop-blur-md rounded-xl shadow-2xl p-6 md:p-10 space-y-8 text-center">
+          <div className="space-y-2">
+            <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">You're Invited!</h1>
+            <p className="text-lg md:text-xl font-light opacity-80">Join us in celebration of love and new beginnings.</p>
+          </div>
+
+          <div className="bg-white bg-opacity-5 rounded-xl p-6 md:p-8 shadow-lg space-y-4">
+            <div className="text-3xl md:text-4xl font-bold">
+              {invitationData.coupleName1} &amp; {invitationData.coupleName2}
+            </div>
+            <div className="text-md md:text-lg font-light opacity-90">
+              {invitationData.date}
+            </div>
+            <div className="text-lg md:text-xl font-medium">
+              {invitationData.location}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <input
+              type="text"
+              className="w-full p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition text-center"
+              placeholder="Your Full Name"
+              value={guestName}
+              onChange={(e) => setGuestName(e.target.value)}
+            />
+            {!isSubmitted ? (
+              <div className="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
+                <button
+                  onClick={() => handleRsvp('coming')}
+                  className="w-full p-4 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 transition transform hover:scale-105 shadow-md"
+                >
+                  Coming
+                </button>
+                <button
+                  onClick={() => handleRsvp('declined')}
+                  className="w-full p-4 rounded-lg font-bold text-white bg-red-600 hover:bg-red-700 transition transform hover:scale-105 shadow-md"
+                >
+                  Can't Come
+                </button>
+                <button
+                  onClick={() => handleRsvp('pending')}
+                  className="w-full p-4 rounded-lg font-bold text-white bg-gray-600 hover:bg-gray-700 transition transform hover:scale-105 shadow-md"
+                >
+                  I'll Try
+                </button>
+              </div>
+            ) : (
+              <div className={`p-4 rounded-lg font-bold text-white ${status === 'coming' ? 'bg-green-600' : status === 'declined' ? 'bg-red-600' : 'bg-gray-600'} transition shadow-md`}>
+                Thank you for your response!
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return <PageContent />;
 };
 
 export default App;
