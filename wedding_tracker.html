@@ -31,14 +31,30 @@
     <!-- In-page JavaScript (mimicking an app.js file) -->
     <script type="text/babel">
         // Global variables provided by the canvas environment
-        const __app_id = "default-app-id";
-        const __firebase_config = "{}";
-        const __initial_auth_token = null;
+        const __app_id = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const __firebase_config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const __initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         const { useState, useEffect } = React;
-        const app = firebase.initializeApp(JSON.parse(__firebase_config));
-        const auth = firebase.auth();
-        const db = firebase.firestore();
+        
+        let app, auth, db;
+        try {
+            if (__firebase_config) {
+                app = firebase.initializeApp(__firebase_config);
+                auth = firebase.auth();
+                db = firebase.firestore();
+                db.settings({
+                    experimentalForceLongPolling: true,
+                    merge: true
+                });
+                firebase.firestore.setLogLevel('debug');
+            } else {
+                throw new Error("Firebase configuration is not available.");
+            }
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            // We will handle this gracefully inside the App component
+        }
 
         // The main App component
         const App = () => {
@@ -50,6 +66,12 @@
 
             // Authentication and page routing logic
             useEffect(() => {
+                if (!auth || !db) {
+                    setError("App failed to start. Firebase may not be configured.");
+                    setLoading(false);
+                    return;
+                }
+
                 const urlParams = new URLSearchParams(window.location.search);
                 const invitationId = urlParams.get('invitationId');
 
@@ -309,4 +331,55 @@
                                                 invitationData.invitees.map((invitee, index) => (
                                                     <li key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg shadow-sm">
                                                         <span>{invitee.name}</span>
-                                                        <
+                                                        <span className={`text-sm font-semibold py-1 px-3 rounded-full ${
+                                                            invitee.status === 'Coming' ? 'bg-green-200 text-green-700' :
+                                                            invitee.status === 'Can\'t Make It' ? 'bg-red-200 text-red-700' :
+                                                            'bg-yellow-200 text-yellow-700'
+                                                        }`}>
+                                                            {invitee.status}
+                                                        </span>
+                                                    </li>
+                                                ))
+                                            ) : (
+                                                <li className="text-center text-gray-500 py-4">No responses yet.</li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : (
+                                <form onSubmit={handleCreateInvitation} className="space-y-4">
+                                    <h2 className="text-xl font-semibold text-center text-gray-800">Create Your Invitation</h2>
+                                    <input type="text" name="invitorName" required placeholder="Your Name" className="w-full p-3 border border-gray-300 rounded-lg"/>
+                                    <input type="text" name="partnerName" required placeholder="Partner's Name" className="w-full p-3 border border-gray-300 rounded-lg"/>
+                                    <input type="date" name="date" required className="w-full p-3 border border-gray-300 rounded-lg"/>
+                                    <input type="time" name="time" required className="w-full p-3 border border-gray-300 rounded-lg"/>
+                                    <input type="text" name="location" required placeholder="Location" className="w-full p-3 border border-gray-300 rounded-lg"/>
+                                    <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-3 px-8 rounded-full hover:bg-indigo-600 transition duration-300">Create</button>
+                                </form>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            if (error) {
+                return <div className="flex justify-center items-center h-screen"><p className="text-red-500 text-center">{error}</p></div>;
+            }
+            if (loading) {
+                return (
+                    <div className="flex justify-center items-center h-screen bg-gray-100">
+                        <div className="text-center">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto mb-4"></div>
+                            <p className="text-gray-600">Starting the app...</p>
+                        </div>
+                    </div>
+                );
+            }
+            
+            return page === 'invitor' ? <InvitorPage /> : <InvitationPage />;
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
