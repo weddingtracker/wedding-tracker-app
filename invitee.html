@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>You're Invited!</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-r from-purple-500 to-indigo-600 min-h-screen flex items-center justify-center p-4 text-white">
+    <div class="w-full max-w-2xl bg-white bg-opacity-10 backdrop-blur-md rounded-xl shadow-2xl p-6 md:p-10 space-y-8 text-center">
+        <div class="space-y-2">
+            <h1 class="text-4xl md:text-5xl font-extrabold tracking-tight">You're Invited!</h1>
+            <p class="text-lg md:text-xl font-light opacity-80">Join us in celebration of love and new beginnings.</p>
+        </div>
+
+        <div class="bg-white bg-opacity-5 rounded-xl p-6 md:p-8 shadow-lg space-y-4">
+            <div class="text-3xl md:text-4xl font-bold">
+                {{ invitation.coupleName1 }} &amp; {{ invitation.coupleName2 }}
+            </div>
+            <div class="text-md md:text-lg font-light opacity-90">
+                {{ invitation.date }}
+            </div>
+            <div class="text-lg md:text-xl font-medium">
+                {{ invitation.location }}
+            </div>
+        </div>
+
+        <div id="rsvp-section" class="space-y-4">
+            <input type="text" id="guestName" class="w-full p-3 rounded-lg bg-white bg-opacity-10 placeholder-gray-200 text-white focus:outline-none focus:ring-2 focus:ring-indigo-400 transition text-center" placeholder="Your Full Name">
+            <div class="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
+                <button onclick="handleRsvp('coming')" class="w-full p-4 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 transition transform hover:scale-105 shadow-md">
+                    Coming
+                </button>
+                <button onclick="handleRsvp('declined')" class="w-full p-4 rounded-lg font-bold text-white bg-red-600 hover:bg-red-700 transition transform hover:scale-105 shadow-md">
+                    Can't Come
+                </button>
+                <button onclick="handleRsvp('i_will_try')" class="w-full p-4 rounded-lg font-bold text-white bg-gray-600 hover:bg-gray-700 transition transform hover:scale-105 shadow-md">
+                    I'll Try
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const invitorId = "{{ invitor_id }}";
+
+        async function handleRsvp(status) {
+            const guestName = document.getElementById('guestName').value;
+            if (!guestName) {
+                alert("Please enter your name.");
+                return;
+            }
+
+            const response = await fetch('/api/rsvp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ invitorId, guestName, status })
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                const rsvpSection = document.getElementById('rsvp-section');
